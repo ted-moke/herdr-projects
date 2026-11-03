@@ -218,8 +218,8 @@ fn sub_row() -> Value {
     row.into()
 }
 
-/// A theme's bold name: under the last agent before the theme, and above the
-/// theme's first Space (see `grouping`).
+/// A theme's bold name, above the theme's first agent and first Space (see
+/// `grouping`).
 fn head_row() -> Value {
     let mut t = InlineTable::new();
     t.insert("token", "$hp_head".into());
@@ -420,8 +420,8 @@ fn table_mut<'a>(parent: &'a mut Item, key: &str) -> Result<&'a mut Item> {
 /// rows, keys and entries of the user are never touched. Idempotent.
 pub fn config_edit(input: &str, spec: &Spec, remove: bool) -> Result<String> {
     let mut doc = input.parse::<DocumentMut>().context("config.toml does not parse")?;
-    let space_first = [head_row()];
-    let agent_last = [sub_row(), break_row(), head_row()];
+    let first = [head_row()];
+    let agent_last = [sub_row(), break_row()];
     let (agent_card, space_card) = (agent_card(), space_card());
     let (old_agent_card, old_space_card) = cards_0_2_19();
 
@@ -434,11 +434,11 @@ pub fn config_edit(input: &str, spec: &Spec, remove: bool) -> Result<String> {
             agents["rows"] = toml_edit::value(Array::from_iter(herdr_agent_rows()));
         }
         if let Some(rows) = agents.get_mut("rows").filter(|v| !v.is_none()) {
-            edit_rows(rows, &[], &agent_last, &herdr_agent_rows(), Some((&agent_card, &old_agent_card)), remove)?;
+            edit_rows(rows, &first, &agent_last, &herdr_agent_rows(), Some((&agent_card, &old_agent_card)), remove)?;
         }
         if let Some(overrides) = agents.get_mut("rows_by_agent").filter(|v| !v.is_none()) {
             for (_, rows) in overrides.as_table_like_mut().context("rows_by_agent must be a table")?.iter_mut() {
-                edit_rows(rows, &[], &agent_last, &herdr_agent_rows(), None, remove)?;
+                edit_rows(rows, &first, &agent_last, &herdr_agent_rows(), None, remove)?;
             }
         }
         let spaces = table_mut(sidebar, "spaces")?;
@@ -446,7 +446,7 @@ pub fn config_edit(input: &str, spec: &Spec, remove: bool) -> Result<String> {
             spaces["rows"] = toml_edit::value(Array::from_iter(herdr_space_rows()));
         }
         if let Some(rows) = spaces.get_mut("rows").filter(|v| !v.is_none()) {
-            edit_rows(rows, &space_first, &[], &herdr_space_rows(), Some((&space_card, &old_space_card)), remove)?;
+            edit_rows(rows, &first, &[], &herdr_space_rows(), Some((&space_card, &old_space_card)), remove)?;
         }
 
         // Tab bar: one command entry.
@@ -608,11 +608,12 @@ mod tests {
         assert_eq!(config_edit(&added, &spec(), false).unwrap(), added);
         // Herdr's parser sees the result as valid TOML.
         assert!(added.parse::<DocumentMut>().is_ok());
-        // The user's own rows stay theirs, above ours; nothing above them.
+        // The user's own rows stay theirs, between the theme head and ours.
         let agents = rows(&added, "agents");
-        assert_eq!(agents[0].replace(' ', ""), "[\"agent\"]");
-        assert!(agents[1].contains("$github"));
-        assert!(agents[2].contains("$hp_sub") && agents[3].contains("$hp_break") && agents[4].contains("$hp_head") && agents.len() == 5);
+        assert!(agents[0].contains("$hp_head") && agents[0].contains("bold = true"));
+        assert_eq!(agents[1].replace(' ', ""), "[\"agent\"]");
+        assert!(agents[2].contains("$github"));
+        assert!(agents[3].contains("$hp_sub") && agents[4].contains("$hp_break") && agents.len() == 5);
 
         let removed = config_edit(&added, &spec(), true).unwrap();
         for ours in ["$hp_", POPUP_ACTION, "needs-you"] {
@@ -633,10 +634,10 @@ mod tests {
         let added = config_edit("", &spec(), false).unwrap();
         let agents = rows(&added, "agents");
         assert_eq!(agents.len(), 4, "{added}");
-        assert!(agents[0].contains("\"state_icon\"") && agents[0].contains("\"agent\"") && agents[0].contains("\"state_text\"") && !agents[0].contains("machine"));
-        assert!(agents[0].contains(crate::grouping::HEAD_MARK) && agents[0].contains("bold = true") && agents[0].contains("bold = false"));
-        assert!(agents[1].contains("$hp_sub"));
-        assert!(agents[2].contains("$hp_break") && agents[3].contains("$hp_head") && agents[3].contains("bold = true"), "a theme's break and the next theme's head close the card");
+        assert!(agents[0].contains("$hp_head") && agents[0].contains("bold = true"), "a theme's head opens its first card");
+        assert!(agents[1].contains("\"state_icon\"") && agents[1].contains("\"agent\"") && agents[1].contains("\"state_text\"") && !agents[1].contains("machine"));
+        assert!(agents[1].contains(crate::grouping::HEAD_MARK) && agents[1].contains("bold = true") && agents[1].contains("bold = false"));
+        assert!(agents[2].contains("$hp_sub") && agents[3].contains("$hp_break"), "the break closes the card before a theme");
         let spaces = rows(&added, "spaces");
         assert_eq!(spaces.len(), 2, "a theme head and one plain row: {added}");
         assert!(spaces[0].contains("$hp_head"));
@@ -651,13 +652,14 @@ mod tests {
     }
 
     #[test]
-    fn the_0_2_37_head_on_top_moves_under_the_card() {
-        let old = "[ui.sidebar.agents]\nrows = [[{ token = \"$hp_head\", bold = true }],[\"state_icon\", \"agent\"], [{ token = \"$hp_sub\", dim = true }]]\n";
+    fn the_0_2_38_head_under_the_card_moves_on_top() {
+        let old = "[ui.sidebar.agents]\nrows = [[\"state_icon\", \"agent\"], [{ token = \"$hp_sub\", dim = true }], [{ token = \"$hp_break\" }], [{ token = \"$hp_head\", bold = true }]]\n";
         let migrated = config_edit(old, &spec(), false).unwrap();
         let agents = rows(&migrated, "agents");
         assert_eq!(agents.len(), 4, "{migrated}");
-        assert_eq!(agents[0].replace(' ', ""), "[\"state_icon\",\"agent\"]");
-        assert!(agents[1].contains("$hp_sub") && agents[2].contains("$hp_break") && agents[3].contains("$hp_head"));
+        assert!(agents[0].contains("$hp_head"));
+        assert_eq!(agents[1].replace(' ', ""), "[\"state_icon\",\"agent\"]");
+        assert!(agents[2].contains("$hp_sub") && agents[3].contains("$hp_break"));
         assert_eq!(config_edit(&migrated, &spec(), false).unwrap(), migrated);
     }
 
@@ -681,8 +683,8 @@ rows = [[{ token = "$hp_top_n", fg = "#f38ba8", bold = true }, { token = "$hp_to
         }
         let agents = rows(&migrated, "agents");
         assert_eq!(agents.len(), 5, "{migrated}");
-        assert!(same(&migrated.parse::<DocumentMut>().unwrap()["ui"]["sidebar"]["agents"]["rows"].as_array().unwrap().get(0).unwrap().clone(), &agent_card()), "the old card became today's in place");
-        assert!(agents[1].contains("$github") && agents[2].contains("$hp_sub") && agents[4].contains("$hp_head"));
+        assert!(same(&migrated.parse::<DocumentMut>().unwrap()["ui"]["sidebar"]["agents"]["rows"].as_array().unwrap().get(1).unwrap().clone(), &agent_card()), "the old card became today's in place");
+        assert!(agents[0].contains("$hp_head") && agents[2].contains("$github") && agents[3].contains("$hp_sub") && agents[4].contains("$hp_break"));
         let spaces = rows(&migrated, "spaces");
         assert_eq!(spaces.len(), 2, "{migrated}");
         assert!(same(&migrated.parse::<DocumentMut>().unwrap()["ui"]["sidebar"]["spaces"]["rows"].as_array().unwrap().get(1).unwrap().clone(), &space_card()));
@@ -709,7 +711,7 @@ sidebar = { agents = { rows = [[{ token = "$hp_top", fg = "#cba6f7", bold = true
             assert!(!migrated.contains(legacy), "{legacy} left in\n{migrated}");
         }
         assert_eq!(rows(&migrated, "agents").len(), 4, "{migrated}");
-        assert!(!rows(&migrated, "agents")[0].contains("machine"), "Herdr's rows became the card");
+        assert!(!rows(&migrated, "agents")[1].contains("machine"), "Herdr's rows became the card");
         assert_eq!(rows(&migrated, "spaces").len(), 2);
         assert_eq!(config_edit(&migrated, &spec(), false).unwrap(), migrated);
     }
