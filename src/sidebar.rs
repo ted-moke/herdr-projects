@@ -218,8 +218,9 @@ fn sub_row() -> Value {
     row.into()
 }
 
-/// The theme head above an agent or Space: drawn only on the first row of
-/// each theme, the one card that carries `$hp_head`.
+/// The theme head above an agent or Space: the theme's name on its first
+/// row, a blank line on its other agents (see `grouping::SPACER`), nothing
+/// outside a theme.
 fn head_row() -> Value {
     let mut t = InlineTable::new();
     t.insert("token", "$hp_head".into());

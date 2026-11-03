@@ -3047,7 +3047,8 @@ fn themed_project(world: &World, sort: &str) -> Project {
             t.last_group = group.into();
             t.pane_id = format!("w1{n}:p1");
             t.workspace_id = format!("w1{n}");
-            t.repo_workspace = "w3".into();
+            // t-0002 is a tab thread: its own Space is also its repository's.
+            t.repo_workspace = if n == 2 { "w12".into() } else { "w3".into() };
         })
         .unwrap();
     }
@@ -3069,7 +3070,7 @@ fn a_themed_project_groups_threads_and_named_agents_under_heads_in_both_lists() 
     let s = |v: &[(&str, &str)]| v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
     // By theme, then id: t-0004 waits on the user and still sits after t-0002.
     assert_eq!(sorted_panes(&part), s(&[("w1:p1", ""), ("w12:p1", "EHS"), ("w14:p1", "EHS"), ("w4G:p1", "EHS"), ("w11:p1", "Runs"), ("w13:p1", crate::grouping::NO_THEME)]));
-    assert_eq!(part.spaces, ["w1", "w3", "w12", "w14", "w4G", "w11", "w13"]);
+    assert_eq!(part.spaces, ["w1", "w12", "w3", "w14", "w4G", "w11", "w13"]);
     assert_eq!(part.heads, s(&[("w12", "EHS"), ("w11", "Runs"), ("w13", crate::grouping::NO_THEME)]));
 }
 

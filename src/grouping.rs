@@ -14,7 +14,8 @@
 //!
 //! Inside a project, threads either sort by need or by theme (PROJECT.md's
 //! `[[themes]]`). By theme, the first row of each theme carries `$hp_head`, a
-//! bold row of the theme's name drawn above it, in both lists.
+//! bold row of the theme's name drawn above it, in both lists; the theme's other agents
+//! carry a blank one so all its rows line up.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -31,6 +32,10 @@ pub const HEAD_MARK: char = '\u{200B}';
 const OTHER: &str = "~";
 /// The head of a project's threads without a theme, once others have one.
 pub const NO_THEME: &str = "Other";
+/// `$hp_head` on every other row of a theme: a blank first line. Herdr indents
+/// a card's later lines, so with it each row under a head lines up with the
+/// first one, which the head itself pushes in.
+pub const SPACER: &str = "\u{2800}";
 
 /// Every token this module writes.
 pub fn tokens() -> Vec<String> {
@@ -152,7 +157,11 @@ pub fn plan(parts: &Parts, agents: &[Agent], workspaces: &[Workspace]) -> Plan {
     let mut last: Option<(String, &str)> = None;
     for (key, pane, sub, theme) in rows {
         let group = (key.split('!').next().unwrap_or_default().to_string(), theme);
-        let head = (!theme.is_empty() && last.as_ref() != Some(&group)).then(|| theme.to_string());
+        let head = match (theme.is_empty(), last.as_ref() == Some(&group)) {
+            (true, _) => None,
+            (false, false) => Some(theme.to_string()),
+            (false, true) => Some(SPACER.to_string()),
+        };
         last = Some(group);
         let tokens = vec![
             ("hp_sub".to_string(), (!sub.is_empty()).then(|| sub.to_string())),
@@ -452,8 +461,14 @@ mod tests {
         let layout = plan(&parts, &agents, &[]);
         let order: Vec<&str> = layout.agents.iter().map(|(p, _)| p.as_str()).collect();
         assert_eq!(order, ["c", "p44", "p56", "rec", "p60", "p41", "p68", "x"], "listed themes in order, hand-made agents after their threads, unlisted, then none");
-        let heads: Vec<(&str, &str)> = layout.agents.iter().filter_map(|(p, t)| get(t, "hp_head").map(|h| (p.as_str(), h))).collect();
+        let heads: Vec<(&str, &str)> = layout.agents.iter().filter_map(|(p, t)| get(t, "hp_head").filter(|h| *h != SPACER).map(|h| (p.as_str(), h))).collect();
         assert_eq!(heads, [("p44", "EHS"), ("p60", "Runs"), ("p41", "VSM"), ("p68", NO_THEME)]);
+        // The other rows of a theme get a blank first line so all line up;
+        // rows in no theme (the coordinator, another project's) get none.
+        let spacers: Vec<&str> = layout.agents.iter().filter(|(_, t)| get(t, "hp_head") == Some(SPACER)).map(|(p, _)| p.as_str()).collect();
+        assert_eq!(spacers, ["p56", "rec"]);
+        let t: HashMap<&str, &Tokens> = layout.agents.iter().map(|(p, t)| (p.as_str(), t)).collect();
+        assert_eq!((get(t["c"], "hp_head"), get(t["x"], "hp_head")), (None, None));
         // The agent view sorts by key alone and gets the same order.
         let keys: Vec<&str> = layout.agents.iter().map(|(_, t)| get(t, "hp_group").unwrap()).collect();
         let mut sorted = keys.clone();

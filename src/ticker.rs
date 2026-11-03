@@ -600,7 +600,8 @@ fn part(ctx: &Ctx, project: &Project, record: &project::Coordinator, coordinator
             pending = Some(head.clone());
             open = Some(head);
         }
-        if !repo.is_empty() && !spaces.contains(&repo) {
+        // A tab thread records its own Space as its repository's too.
+        if !repo.is_empty() && repo != own && !spaces.contains(&repo) {
             spaces.push(repo);
         }
         if !own.is_empty() && !spaces.contains(&own) {
