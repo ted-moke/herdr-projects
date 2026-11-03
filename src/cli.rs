@@ -344,6 +344,20 @@ enum ThreadCommand {
         /// Delegating this TASKS.md task (its title as written there): its notes are added to the task, and its owner gives --profile and --machine
         #[arg(long, value_name = "TITLE")]
         from_task: Option<String>,
+        /// The workstream it sorts under in the sidebar, one of `[[themes]]` in PROJECT.md
+        #[arg(long, value_name = "NAME")]
+        theme: Option<String>,
+    },
+    /// Set the theme a thread sorts under in the sidebar, or clear it
+    Theme {
+        slug: String,
+        id: String,
+        /// The theme, one of `[[themes]]` in PROJECT.md
+        #[arg(required_unless_present = "clear", conflicts_with = "clear")]
+        theme: Option<String>,
+        /// No theme: the thread sorts last
+        #[arg(long)]
+        clear: bool,
     },
     /// Bring back a thread whose pane is gone or whose start failed
     Restart {
@@ -705,7 +719,8 @@ pub fn run() -> Result<()> {
             }
         },
         Command::Thread { command } => match command {
-            ThreadCommand::Start { slug, title, repo, mut machine, mut profile, kind, base, task_file, from_task } => {
+            ThreadCommand::Theme { slug, id, theme, clear: _ } => threads::set_theme(&ctx, &slug, &id, theme.as_deref()),
+            ThreadCommand::Start { slug, title, repo, mut machine, mut profile, kind, base, task_file, from_task, theme } => {
                 let mut task = read_text(&task_file)?;
                 if let Some(from) = from_task {
                     // The task's owner picks the profile and machine.
@@ -720,7 +735,7 @@ pub fn run() -> Result<()> {
                     task = crate::tasks::delegated(&tasks_md, &from, &task)?;
                 }
                 let kind = kind.as_deref().map(crate::thread::Kind::parse).transpose()?;
-                let thread = threads::start(&ctx, &slug, StartArgs { title, repo, machine, profile, kind, base, task })?;
+                let thread = threads::start(&ctx, &slug, StartArgs { title, repo, machine, profile, kind, base, task, theme })?;
                 println!("{}", serde_json::json!({ "id": thread.id, "kind": thread.kind, "profile": thread.profile, "agent": thread.agent, "branch": thread.branch, "pane_id": thread.pane_id }));
                 Ok(())
             }

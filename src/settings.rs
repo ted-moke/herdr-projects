@@ -11,7 +11,7 @@ use crate::paths::Ctx;
 use crate::project::{self, Project, Settings};
 
 /// The keys `set` accepts, with what they hold.
-pub const KEYS: [(&str, &str); 10] = [
+pub const KEYS: [(&str, &str); 11] = [
     ("name", "text"),
     ("goal", "text"),
     ("coordinator_profile", "profile name"),
@@ -20,6 +20,7 @@ pub const KEYS: [(&str, &str); 10] = [
     ("auto_resolve_days", "number (0 = never)"),
     ("nudge", "true/false"),
     ("mute", "true/false"),
+    ("sidebar_sort", "theme/state"),
     ("repos.add", "PATH or PATH@MACHINE"),
     ("repos.remove", "PATH"),
 ];
@@ -97,6 +98,12 @@ pub fn set_in(text: &str, key: &str, value: &str) -> Result<String> {
             doc[key] = toml_edit::value(n);
         }
         "nudge" | "mute" => doc[key] = toml_edit::value(parse_bool(value)?),
+        "sidebar_sort" => {
+            if !matches!(value, "theme" | "state") {
+                bail!("sidebar_sort is `theme` or `state`");
+            }
+            doc[key] = toml_edit::value(value);
+        }
         "repos.add" => {
             let repo = project::parse_repo_arg(value);
             if repo.path.is_empty() {
@@ -267,6 +274,13 @@ mod tests {
         assert!(project::parse_project_md(&muted).unwrap().0.mute);
         let goal = set_in(MD, "goal", "Ship \"it\"").unwrap();
         assert_eq!(project::parse_project_md(&goal).unwrap().0.goal, "Ship \"it\"");
+        // The sort is set next to the plain keys, and themes written by hand survive.
+        let themed = MD.replace("\n+++\n\n# Instructions", "\n\n[[themes]]\nname = \"EHS\"\n+++\n\n# Instructions");
+        let sorted = set_in(&themed, "sidebar_sort", "state").unwrap();
+        let (settings, _) = project::parse_project_md(&sorted).unwrap();
+        assert_eq!(settings.sidebar_sort, Some(project::SidebarSort::State));
+        assert_eq!(settings.themes[0].name, "EHS");
+        assert!(set_in(MD, "sidebar_sort", "random").is_err());
     }
 
     #[test]

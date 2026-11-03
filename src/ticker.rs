@@ -535,24 +535,89 @@ fn part(ctx: &Ctx, project: &Project, record: &project::Coordinator, coordinator
         let (report, text) = activity(&pane);
         let line = coordinators.iter().find(|c| c.pane_id == pane).map(|c| coordinator::row_state(c, report.as_ref()).1).unwrap_or_default();
         let sub = if paused { String::new() } else { crate::sidebar::sub_line(&line, &text) };
-        panes.push(crate::grouping::PaneRow { key: crate::grouping::coordinator_key(slug, &pane), pane, sub });
+        panes.push(crate::grouping::PaneRow { key: crate::grouping::coordinator_key(slug, &pane), pane, sub, theme: String::new() });
     }
+
+    let settings = project.read_project_md().map(|(s, _)| s).unwrap_or_default();
+    let listed: Vec<String> = settings.themes.iter().map(|t| t.name.clone()).collect();
+    // Hand-made agents a theme names by their Herdr name, unless the pane is
+    // already this project's coordinator or one of its threads.
+    let mut hand: Vec<(&Agent, &str)> = Vec::new();
+    for theme in &settings.themes {
+        for a in agents.iter().filter(|a| !a.name.is_empty() && theme.agents.contains(&a.name)) {
+            let taken = panes.iter().any(|p| p.pane == a.pane_id) || threads.iter().any(|t| t.pane_id == a.pane_id) || hand.iter().any(|(h, _)| h.pane_id == a.pane_id);
+            if !taken {
+                hand.push((a, theme.name.as_str()));
+            }
+        }
+    }
+    let by_theme = settings.sorts_by_theme(threads.iter().any(|t| !t.theme.is_empty()));
+    let any_theme = threads.iter().any(|t| !t.theme.is_empty()) || !hand.is_empty();
+    let label = |theme: &str| -> String {
+        match (by_theme, theme.is_empty()) {
+            (false, _) => String::new(),
+            (true, false) => theme.to_string(),
+            (true, true) if any_theme => crate::grouping::NO_THEME.to_string(),
+            (true, true) => String::new(),
+        }
+    };
+    let slot = |theme: &str| crate::grouping::theme_slot(&listed, theme);
+
     for t in &threads {
         let rank = thread::Group::from_token(&t.last_group).map(thread::Group::rank).unwrap_or(9);
         if !t.pane_id.is_empty() {
             let sub = if paused { String::new() } else { crate::sidebar::sub_line(&t.state_line, &activity(&t.pane_id).1) };
-            panes.push(crate::grouping::PaneRow { pane: t.pane_id.clone(), key: crate::grouping::thread_key(slug, rank, &t.id), sub });
+            let key = if by_theme { crate::grouping::themed_key(slug, &slot(&t.theme), &t.id) } else { crate::grouping::thread_key(slug, rank, &t.id) };
+            panes.push(crate::grouping::PaneRow { pane: t.pane_id.clone(), key, sub, theme: label(&t.theme) });
         }
     }
+    for (a, theme) in &hand {
+        let key = crate::grouping::agent_key(slug, by_theme.then(|| slot(theme)).as_deref(), &a.name);
+        panes.push(crate::grouping::PaneRow { pane: a.pane_id.clone(), key, sub: String::new(), theme: label(theme) });
+    }
+
+    // Spaces: the home, then each thread's (and hand-made agent's) in the
+    // agents' order, the first new Space of each theme carrying its head.
+    let mut entries: Vec<(String, [String; 2], String)> = threads
+        .iter()
+        .map(|t| (t.id.clone(), [t.repo_workspace.clone(), t.workspace_id.clone()], t.theme.clone()))
+        .chain(hand.iter().map(|(a, theme)| (format!("~{}", a.name), [String::new(), a.workspace_id.clone()], theme.to_string())))
+        .collect();
+    if by_theme {
+        entries.sort_by_cached_key(|(id, _, theme)| (slot(theme), id.clone()));
+    }
     let mut spaces: Vec<String> = Vec::new();
-    let home = coordinators.iter().map(|c| c.workspace_id.clone()).chain([record.workspace_id.clone()]);
-    let own = threads.iter().flat_map(|t| [t.repo_workspace.clone(), t.workspace_id.clone()]);
-    for id in home.chain(own) {
+    for id in coordinators.iter().map(|c| c.workspace_id.clone()).chain([record.workspace_id.clone()]) {
         if !id.is_empty() && !spaces.contains(&id) {
             spaces.push(id);
         }
     }
-    crate::grouping::ProjectPart { panes, home: record.workspace_id.clone(), spaces }
+    let mut heads: Vec<(String, String)> = Vec::new();
+    let (mut open, mut pending): (Option<String>, Option<String>) = (None, None);
+    for (_, [repo, own], theme) in entries {
+        let head = label(&theme);
+        if !head.is_empty() && open.as_ref() != Some(&head) {
+            pending = Some(head.clone());
+            open = Some(head);
+        }
+        if !repo.is_empty() && !spaces.contains(&repo) {
+            spaces.push(repo);
+        }
+        if !own.is_empty() && !spaces.contains(&own) {
+            if let Some(head) = pending.take() {
+                heads.push((own.clone(), head));
+            }
+            spaces.push(own);
+        }
+    }
+    crate::grouping::ProjectPart { panes, home: record.workspace_id.clone(), spaces, heads }
+}
+
+/// One project's sidebar part, as a tick with these agents would build it.
+#[cfg(test)]
+pub fn part_for_test(ctx: &Ctx, project: &Project, agents: &[Agent]) -> crate::grouping::ProjectPart {
+    let record = project.coordinator().unwrap_or_default();
+    part(ctx, project, &record, &[], agents, false)
 }
 
 #[cfg(test)]

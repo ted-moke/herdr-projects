@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::coordinator;
+use crate::herdr::Agent;
 use crate::paths::{Ctx, Env};
 use crate::project::{self, Project};
 use crate::runner::{Cmd, Output};
@@ -189,6 +190,7 @@ fn thread_start_returns_without_an_agent_and_the_ticker_launches_then_prompts() 
             kind: None,
             base: None,
             task: "Do the thing.".into(),
+            theme: None,
         },
     )
     .unwrap();
@@ -582,7 +584,7 @@ fn thread_start_is_refused_when_paused() {
     let world = World::new();
     let project = world.project("demo", "a.sock");
     project.set_status(project::Status::Paused).unwrap();
-    let args = StartArgs { title: "x".into(), repo: None, machine: None, profile: None, kind: None, base: None, task: "t".into() };
+    let args = StartArgs { title: "x".into(), repo: None, machine: None, profile: None, kind: None, base: None, task: "t".into(), theme: None };
     let error = threads::start(&world.ctx(), "demo", args).unwrap_err().to_string();
     assert!(error.contains("paused"), "{error}");
     assert!(thread::list(&project).is_empty());
@@ -606,7 +608,7 @@ fn thread_start_and_open_refuse_profiles_off_the_allow_list() {
     let project = world.project("demo", "a.sock");
     write_profiles(&world, PROFILES);
     for bad in ["deep", "codex", "nope"] {
-        let args = StartArgs { title: "x".into(), repo: None, machine: None, profile: Some(bad.into()), kind: Some(Kind::Tab), base: None, task: "t".into() };
+        let args = StartArgs { title: "x".into(), repo: None, machine: None, profile: Some(bad.into()), kind: Some(Kind::Tab), base: None, task: "t".into(), theme: None };
         let error = threads::start(&world.ctx(), "demo", args).unwrap_err().to_string();
         assert!(error.contains("not allowed for threads") || error.contains("no profile `nope`"), "{error}");
         let options = coordinator::OpenOptions { session: Default::default(), rebind: false, profile: Some(bad.into()), new: true, here: false };
@@ -1802,7 +1804,7 @@ fn a_remote_thread_blocked_at_a_poll_is_waiting_on_you_at_once() {
 fn a_remote_thread_without_a_repo_is_refused() {
     let world = World::new();
     world.project("demo", "a.sock");
-    let args = StartArgs { title: "x".into(), repo: None, machine: Some("box".into()), profile: None, kind: None, base: None, task: "t".into() };
+    let args = StartArgs { title: "x".into(), repo: None, machine: Some("box".into()), profile: None, kind: None, base: None, task: "t".into(), theme: None };
     assert!(threads::start(&world.ctx(), "demo", args).unwrap_err().to_string().contains("needs --repo"));
 }
 
@@ -1985,7 +1987,7 @@ fn a_tab_thread_with_a_repo_gets_its_brief_seconds_after_its_agent_is_ready() {
     world.runner.on("agent prompt", ok(r#"{"result":{}}"#));
     *world.panes.borrow_mut() = format!("[{}]", world.coordinator_pane(&project));
     let ctx = world.ctx();
-    let args = StartArgs { title: "Clean up".into(), repo: Some(repo.to_string_lossy().into_owned()), machine: None, profile: None, kind: Some(Kind::Tab), base: None, task: "Tidy.".into() };
+    let args = StartArgs { title: "Clean up".into(), repo: Some(repo.to_string_lossy().into_owned()), machine: None, profile: None, kind: Some(Kind::Tab), base: None, task: "Tidy.".into(), theme: None };
     let t = threads::start(&ctx, "demo", args).unwrap();
     assert_eq!((t.kind, t.cwd.as_str(), t.prompt_pending), (Kind::Tab, cwd.as_str(), true));
 
@@ -2041,7 +2043,7 @@ fn a_tab_thread_gets_a_brief_with_the_project_header_and_prompts_are_recorded() 
     // Delegated from TASKS.md: the task's notes reach the brief.
     std::fs::write(project.dir().join("TASKS.md"), "# Tasks\n\n## Backlog\n- [ ] Research (agent)\n  Start with the 2025 papers.\n").unwrap();
     let task = crate::tasks::delegated(&crate::tasks::read(&project.dir()), "Research", "Look into it.").unwrap();
-    let t = threads::start(&ctx, "demo", StartArgs { title: "Research".into(), repo: None, machine: None, profile: None, kind: Some(Kind::Tab), base: None, task }).unwrap();
+    let t = threads::start(&ctx, "demo", StartArgs { title: "Research".into(), repo: None, machine: None, profile: None, kind: Some(Kind::Tab), base: None, task, theme: None }).unwrap();
     assert_eq!(t.kind, Kind::Tab);
     let brief = std::fs::read_to_string(Path::new(&t.thread_dir).join("brief.md")).unwrap();
     assert!(brief.contains("Look into it.\n\n## Notes from the task list\n\nStart with the 2025 papers."), "{brief}");
@@ -2276,7 +2278,7 @@ fn a_tab_thread_of_a_coordinator_running_in_another_workspace_opens_the_project_
     h.open(true, false).unwrap();
     let folder = h.project.dir().join("threads/t-0001");
     h.world.runner.on("pane get", ok(r#"{"result":{"pane":{"cwd":""}}}"#));
-    let args = |title: &str| StartArgs { title: title.into(), repo: None, machine: None, profile: None, kind: Some(Kind::Tab), base: None, task: "Look.".into() };
+    let args = |title: &str| StartArgs { title: title.into(), repo: None, machine: None, profile: None, kind: Some(Kind::Tab), base: None, task: "Look.".into(), theme: None };
     let t = threads::start(&h.world.ctx(), "demo", args("Research")).unwrap();
     let calls = h.world.runner.calls.borrow();
     let create = calls.iter().filter(|c| c.display().contains("workspace create")).last().unwrap();
@@ -2903,7 +2905,7 @@ fn a_coordinator_renames_its_own_project_and_reopens_in_the_new_folder() {
     assert!(old.is_dir());
     let pending = crate::rename::pending(&world.root, "scratch").unwrap();
     assert!(pending.reopen && pending.to == "home");
-    let start = threads::start(&ctx, "scratch", StartArgs { title: "x".into(), repo: None, machine: None, profile: None, kind: None, base: None, task: "y".into() });
+    let start = threads::start(&ctx, "scratch", StartArgs { title: "x".into(), repo: None, machine: None, profile: None, kind: None, base: None, task: "y".into(), theme: None });
     assert!(start.unwrap_err().to_string().contains("being renamed"));
 
     // While it works (finishing its reply), nothing happens.
@@ -3027,4 +3029,60 @@ fn coordinator_prompt_reaches_its_own_project_s_coordinator_not_one_whose_shell_
         })
         .collect();
     assert_eq!(sent, [("wH:p1".to_string(), "Merge the open PRs.".to_string()), ("wW:p1".to_string(), "Status?".to_string())]);
+}
+
+/// A project with themes: threads under two listed themes, one without, and
+/// a hand-made agent named in a theme.
+fn themed_project(world: &World, sort: &str) -> Project {
+    let project = world.project("glyd", "a.sock");
+    let md = project.dir().join("PROJECT.md");
+    let themes = format!("{sort}\n[[themes]]\nname = \"EHS\"\nagents = [\"ehs-reconcile\"]\n\n[[themes]]\nname = \"Runs\"\n+++\n");
+    let text = std::fs::read_to_string(&md).unwrap().replacen("\n+++\n", &format!("\n{themes}"), 1);
+    std::fs::write(&md, text).unwrap();
+    for (n, theme, group) in [(1, "Runs", "working"), (2, "EHS", "idle"), (3, "", "working"), (4, "EHS", "waiting-on-you")] {
+        thread::allocate(&project, |t| {
+            t.title = format!("Task {n}");
+            t.theme = theme.into();
+            t.status = Status::Open;
+            t.last_group = group.into();
+            t.pane_id = format!("w1{n}:p1");
+            t.workspace_id = format!("w1{n}");
+            t.repo_workspace = "w3".into();
+        })
+        .unwrap();
+    }
+    project
+}
+
+fn sorted_panes(part: &crate::grouping::ProjectPart) -> Vec<(String, String)> {
+    let mut rows = part.panes.clone();
+    rows.sort_by(|a, b| a.key.cmp(&b.key));
+    rows.into_iter().map(|r| (r.pane, r.theme)).collect()
+}
+
+#[test]
+fn a_themed_project_groups_threads_and_named_agents_under_heads_in_both_lists() {
+    let world = World::new();
+    let project = themed_project(&world, "");
+    let agents = [Agent { pane_id: "w4G:p1".into(), workspace_id: "w4G".into(), name: "ehs-reconcile".into(), ..Agent::default() }, Agent { pane_id: "w9:p1".into(), workspace_id: "w9".into(), name: "stranger".into(), ..Agent::default() }];
+    let part = ticker::part_for_test(&world.ctx(), &project, &agents);
+    let s = |v: &[(&str, &str)]| v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
+    // By theme, then id: t-0004 waits on the user and still sits after t-0002.
+    assert_eq!(sorted_panes(&part), s(&[("w1:p1", ""), ("w12:p1", "EHS"), ("w14:p1", "EHS"), ("w4G:p1", "EHS"), ("w11:p1", "Runs"), ("w13:p1", crate::grouping::NO_THEME)]));
+    assert_eq!(part.spaces, ["w1", "w3", "w12", "w14", "w4G", "w11", "w13"]);
+    assert_eq!(part.heads, s(&[("w12", "EHS"), ("w11", "Runs"), ("w13", crate::grouping::NO_THEME)]));
+}
+
+#[test]
+fn sidebar_sort_state_keeps_the_by_need_order_without_heads() {
+    let world = World::new();
+    let project = themed_project(&world, "sidebar_sort = \"state\"");
+    let agents = [Agent { pane_id: "w4G:p1".into(), workspace_id: "w4G".into(), name: "ehs-reconcile".into(), ..Agent::default() }];
+    let part = ticker::part_for_test(&world.ctx(), &project, &agents);
+    let order: Vec<String> = sorted_panes(&part).into_iter().map(|(p, theme)| {
+        assert!(theme.is_empty(), "no heads by need");
+        p
+    }).collect();
+    assert_eq!(order, ["w1:p1", "w14:p1", "w11:p1", "w13:p1", "w12:p1", "w4G:p1"], "needs you, working by id, idle, then the hand-made agent");
+    assert!(part.heads.is_empty());
 }

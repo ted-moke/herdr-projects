@@ -125,8 +125,30 @@ pub struct Repo {
     pub machine: Option<String>,
 }
 
-/// `PROJECT.md` front matter. `repos` is last so the TOML tables follow the
-/// plain keys when `new` serializes it.
+/// One workstream inside a project: its threads (by their `theme`) and the
+/// hand-made agents named in `agents` sit together under its name in the
+/// sidebar.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct Theme {
+    pub name: String,
+    /// Herdr agent names of panes that are not threads (`ehs-reconcile`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
+}
+
+/// How a project's threads are ordered in the sidebar.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SidebarSort {
+    /// By theme, then id: a row stays put when its state changes.
+    Theme,
+    /// By need (waiting on you first), then id.
+    State,
+}
+
+/// `PROJECT.md` front matter. `repos` and `themes` are last so the TOML
+/// tables follow the plain keys when `new` serializes it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
@@ -144,7 +166,24 @@ pub struct Settings {
     pub nudge: bool,
     /// Silences every notification for the project except errors.
     pub mute: bool,
+    /// Unset: by theme once any theme is named, else by state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidebar_sort: Option<SidebarSort>,
     pub repos: Vec<Repo>,
+    /// The sidebar's theme order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub themes: Vec<Theme>,
+}
+
+impl Settings {
+    /// Whether the sidebar groups by theme: asked for, or unset while some
+    /// theme is named (in `themes` or by `any_thread_theme`).
+    pub fn sorts_by_theme(&self, any_thread_theme: bool) -> bool {
+        match self.sidebar_sort {
+            Some(sort) => sort == SidebarSort::Theme,
+            None => !self.themes.is_empty() || any_thread_theme,
+        }
+    }
 }
 
 impl Default for Settings {
@@ -161,7 +200,9 @@ impl Default for Settings {
             // merges with half-typed text (docs/herdr-notes.md, stage 2).
             nudge: true,
             mute: false,
+            sidebar_sort: None,
             repos: Vec::new(),
+            themes: Vec::new(),
         }
     }
 }
@@ -717,6 +758,27 @@ pub fn create(root: &Path, name: &str, goal: &str, repos: Vec<Repo>) -> Result<P
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn themes_parse_in_order_and_decide_the_sort_when_it_is_unset() {
+        let text = "+++\nname = \"Glyd\"\n\n[[themes]]\nname = \"EHS\"\nagents = [\"ehs-reconcile\"]\n\n[[themes]]\nname = \"VSM\"\n+++\nbody\n";
+        let (settings, _) = parse_project_md(text).unwrap();
+        let names: Vec<&str> = settings.themes.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["EHS", "VSM"]);
+        assert_eq!(settings.themes[0].agents, ["ehs-reconcile"]);
+        assert!(settings.themes[1].agents.is_empty());
+        assert!(settings.sorts_by_theme(false), "unset with themes listed: by theme");
+        let state = Settings { sidebar_sort: Some(SidebarSort::State), ..settings.clone() };
+        assert!(!state.sorts_by_theme(true));
+        let plain = Settings::default();
+        assert!(!plain.sorts_by_theme(false), "no theme anywhere: by need, as before");
+        assert!(plain.sorts_by_theme(true), "a thread's theme is enough");
+        let (parsed, _) = parse_project_md("+++\nsidebar_sort = \"theme\"\n+++\n").unwrap();
+        assert!(parsed.sorts_by_theme(false));
+        // A new project's front matter is unchanged by the new settings.
+        let front = toml::to_string(&Settings::default()).unwrap();
+        assert!(!front.contains("themes") && !front.contains("sidebar_sort"), "{front}");
+    }
 
     #[test]
     fn only_folders_with_project_md_count() {

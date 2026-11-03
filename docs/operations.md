@@ -39,7 +39,17 @@ How Herdr Projects works, what it writes where, what its safety settings do and 
 
 Every thread works from `<its working directory>/.herdr-project/<project>-<id>/`: `brief.md` (written by the binary), `report.md` and `library/` (written by the agent). In a git repository that folder is in `info/exclude`, so nothing in it is committed. Git therefore treats it as clean and removing a worktree deletes it, which is why a resolve keeps the worktree when the final copy home was partial.
 
-`PROJECT.md` settings, all changeable from the popup's settings section, from chat, or with `herdr-projects set <project> <key> <value>`: `name` (the workspace label), `goal`, `repos` (`repos.add PATH[@MACHINE]`, `repos.remove PATH`), `coordinator_profile` and `thread_profile` (the default [profiles](#agent-profiles); the old names `coordinator_agent` and `thread_agent` still read), `max_parallel_threads` (10), `auto_resolve_days` (7), `nudge` (`true`), `mute` (`false`).
+`PROJECT.md` settings, all changeable from the popup's settings section, from chat, or with `herdr-projects set <project> <key> <value>`: `name` (the workspace label), `goal`, `repos` (`repos.add PATH[@MACHINE]`, `repos.remove PATH`), `coordinator_profile` and `thread_profile` (the default [profiles](#agent-profiles); the old names `coordinator_agent` and `thread_agent` still read), `max_parallel_threads` (10), `auto_resolve_days` (7), `nudge` (`true`), `mute` (`false`), `sidebar_sort` (`theme` or `state`; unset, it is `theme` once any theme is named).
+
+Themes group a project's threads by workstream in the sidebar. List them in `PROJECT.md`, in the order the sidebar shows them, as `[[themes]]` tables with a `name` and optional `agents`, the Herdr names of hand-made agent panes that belong there:
+
+```toml
+[[themes]]
+name = "EHS faults & reconciler"
+agents = ["ehs-reconcile"]
+```
+
+A thread gets its theme from `thread start --theme <name>` or `thread theme <project> <id> <name>` (`--clear` removes it). By theme, the project's agents sort by theme and then id, so a row stays put when its state changes, and the first row of each theme has a bold head with its name; unlisted themes follow the listed ones, and threads without one come last under `Other`. The Spaces list follows the same order. The head is the `$hp_head` row `configure` adds at the top of each card.
 
 ## Commands
 

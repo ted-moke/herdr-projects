@@ -283,3 +283,39 @@ mod progress_hooks {
         }
     }
 }
+
+#[test]
+fn thread_theme_sets_warns_on_an_unlisted_name_and_clears() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join("root");
+    let root_arg = root.to_str().unwrap();
+    assert!(hp(home.path(), &["--root", root_arg, "new", "demo"]).status.success());
+    let md = root.join("demo/PROJECT.md");
+    let text = std::fs::read_to_string(&md).unwrap();
+    let text = text.replacen("\n+++\n", "\n\n[[themes]]\nname = \"EHS faults & reconciler\"\nagents = [\"ehs-reconcile\"]\n+++\n", 1);
+    std::fs::write(&md, text).unwrap();
+    let record = root.join("demo/threads/t-0001.toml");
+    std::fs::write(&record, "id = \"t-0001\"\ntitle = \"Faults\"\n").unwrap();
+    let theme = |args: &[&str]| {
+        let mut all = vec!["--root", root_arg, "thread", "theme", "demo", "t-0001"];
+        all.extend_from_slice(args);
+        hp(home.path(), &all)
+    };
+
+    let out = theme(&["EHS faults & reconciler"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.stderr.is_empty(), "a listed theme needs no warning");
+    assert!(std::fs::read_to_string(&record).unwrap().contains("theme = \"EHS faults & reconciler\""));
+
+    let out = theme(&["  VSM "]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not in PROJECT.md's [[themes]]"));
+    assert!(std::fs::read_to_string(&record).unwrap().contains("theme = \"VSM\""), "trimmed");
+
+    assert!(!theme(&[" "]).status.success(), "an empty theme is refused");
+    assert!(!theme(&[]).status.success(), "a theme or --clear is required");
+    assert!(!theme(&["VSM", "--clear"]).status.success());
+    assert!(theme(&["--clear"]).status.success());
+    let cleared = std::fs::read_to_string(&record).unwrap();
+    assert!(cleared.contains("theme = \"\"") && cleared.contains("title = \"Faults\""), "{cleared}");
+}

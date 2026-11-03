@@ -58,6 +58,9 @@ impl Kind {
 pub struct Thread {
     pub id: String,
     pub title: String,
+    /// The workstream it sorts under in the sidebar (`[[themes]]` in
+    /// PROJECT.md); empty for none.
+    pub theme: String,
     pub status: Status,
     pub error: String,
     pub prompt_pending: bool,

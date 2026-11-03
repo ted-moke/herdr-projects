@@ -80,6 +80,8 @@ pub struct StartArgs {
     pub kind: Option<Kind>,
     pub base: Option<String>,
     pub task: String,
+    /// `--theme`: the workstream it sorts under in the sidebar.
+    pub theme: Option<String>,
 }
 
 /// The profile a thread starts with.
@@ -184,8 +186,13 @@ pub fn start(ctx: &Ctx, slug: &str, args: StartArgs) -> Result<Thread> {
 
     let profile = thread_profile(ctx, &project, &machine, args.profile.as_deref())?;
     let kind = placement(args.kind, !repo.is_empty(), !machine.is_empty())?;
+    let theme = match args.theme.as_deref() {
+        Some(name) => theme_name(&project, name)?,
+        None => String::new(),
+    };
     let record = thread::allocate(&project, |t| {
         t.title = args.title.trim().to_string();
+        t.theme = theme;
         t.kind = kind;
         t.repo = repo.clone();
         t.machine = machine.clone();
@@ -573,6 +580,35 @@ pub fn prompt(ctx: &Ctx, slug: &str, id: &str, text: &str) -> Result<String> {
 
 /// `thread next`: forward line N of the thread's Next list as a prompt, or add
 /// a line the coordinator wants on that list.
+/// A theme name as stored: one trimmed line. A name PROJECT.md's
+/// `[[themes]]` does not list is kept, with a warning that it sorts after the
+/// listed ones.
+fn theme_name(project: &Project, name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().any(char::is_control) {
+        bail!("a theme is one non-empty line");
+    }
+    let listed = project.read_project_md().map(|(s, _)| s.themes).unwrap_or_default();
+    if !listed.iter().any(|t| t.name == name) {
+        eprintln!("warning: \"{name}\" is not in PROJECT.md's [[themes]]; it sorts after the listed themes");
+    }
+    Ok(name.to_string())
+}
+
+/// `thread theme`: set or clear the theme a thread sorts under.
+pub fn set_theme(ctx: &Ctx, slug: &str, id: &str, theme: Option<&str>) -> Result<()> {
+    let project = Project::load(&ctx.root, slug)?;
+    thread::load(&project, id)?;
+    let theme = theme.map(|name| theme_name(&project, name)).transpose()?.unwrap_or_default();
+    thread::update(&project, id, |t| t.theme = theme.clone())?;
+    if theme.is_empty() {
+        println!("{id} has no theme");
+    } else {
+        println!("{id} sorts under \"{theme}\"");
+    }
+    Ok(())
+}
+
 pub fn next(ctx: &Ctx, slug: &str, id: &str, line: Option<usize>, add: Option<&str>) -> Result<()> {
     let project = Project::load(&ctx.root, slug)?;
     thread::load(&project, id)?;

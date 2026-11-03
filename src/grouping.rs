@@ -11,6 +11,10 @@
 //!
 //! Agents sort by `$hp_group` in the agent view; Spaces are moved into one
 //! block per project with `workspace.move`. Anything in no project comes last.
+//!
+//! Inside a project, threads either sort by need or by theme (PROJECT.md's
+//! `[[themes]]`). By theme, the first row of each theme carries `$hp_head`, a
+//! bold row of the theme's name drawn above it, in both lists.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -25,10 +29,12 @@ pub const HOME_MARK: char = '\u{2800}';
 pub const HEAD_MARK: char = '\u{200B}';
 /// The group key of whatever belongs to no project: sorts after every slug.
 const OTHER: &str = "~";
+/// The head of a project's threads without a theme, once others have one.
+pub const NO_THEME: &str = "Other";
 
 /// Every token this module writes.
 pub fn tokens() -> Vec<String> {
-    ["hp_sub", "hp_group"].map(String::from).to_vec()
+    ["hp_sub", "hp_group", "hp_head"].map(String::from).to_vec()
 }
 
 /// Tokens of earlier layouts: the 0.2.17/0.2.18 headings and the 0.2.19
@@ -51,6 +57,9 @@ pub struct PaneRow {
     pub key: String,
     /// `review · report`, `~40% · Writing tests`, or empty.
     pub sub: String,
+    /// The theme it is grouped under, drawn as a head above the first row of
+    /// the theme; empty when the project is not grouped by theme.
+    pub theme: String,
 }
 
 /// One project's part of a session, as its tick saw it.
@@ -63,6 +72,8 @@ pub struct ProjectPart {
     /// The project's Spaces, home first, then each thread's repository Space
     /// and its own.
     pub spaces: Vec<String>,
+    /// `(Space, theme)` for the first Space of each theme.
+    pub heads: Vec<(String, String)>,
 }
 
 /// Every project's part in one Herdr session, keyed by slug.
@@ -77,6 +88,31 @@ pub fn thread_key(slug: &str, rank: u8, id: &str) -> String {
     format!("{slug}!1!{rank}!{id}")
 }
 
+/// Where a theme sorts: its place in `listed`, then unlisted themes by name,
+/// then no theme. Threads sort by id inside it, so a row never moves when
+/// its state changes.
+pub fn theme_slot(listed: &[String], theme: &str) -> String {
+    match listed.iter().position(|t| t == theme) {
+        Some(i) => format!("{i:03}!{theme}"),
+        None if theme.is_empty() => "999!".to_string(),
+        None => format!("900!{theme}"),
+    }
+}
+
+/// A thread's key when its project sorts by theme.
+pub fn themed_key(slug: &str, slot: &str, id: &str) -> String {
+    format!("{slug}!1!{slot}!{id}")
+}
+
+/// A hand-made agent's key (one PROJECT.md's `[[themes]]` names): after the
+/// threads of its theme, or after every thread when sorting by need.
+pub fn agent_key(slug: &str, slot: Option<&str>, name: &str) -> String {
+    match slot {
+        Some(slot) => format!("{slug}!1!{slot}!~{name}"),
+        None => format!("{slug}!2!{name}"),
+    }
+}
+
 /// Tokens for one card: `Some` sets, `None` clears.
 pub type Tokens = Vec<(String, Option<String>)>;
 
@@ -85,6 +121,8 @@ pub struct Plan {
     pub agents: Vec<(String, Tokens)>,
     /// The Space order Herdr should end up with.
     pub order: Vec<String>,
+    /// Tokens for every project's Spaces: the theme head or none.
+    pub spaces: Vec<(String, Tokens)>,
 }
 
 /// The whole layout of one session. Agents: projects by slug, each in its own
@@ -101,18 +139,37 @@ pub fn plan(parts: &Parts, agents: &[Agent], workspaces: &[Workspace]) -> Plan {
             owner.entry(row.pane.as_str()).or_insert(row);
         }
     }
-    let mut rows: Vec<(String, &str, &str)> = agents
+    let mut rows: Vec<(String, &str, &str, &str)> = agents
         .iter()
         .enumerate()
         .map(|(i, a)| match owner.get(a.pane_id.as_str()) {
-            Some(row) => (row.key.clone(), a.pane_id.as_str(), row.sub.as_str()),
-            None => (format!("{OTHER}!{i:04}"), a.pane_id.as_str(), ""),
+            Some(row) => (row.key.clone(), a.pane_id.as_str(), row.sub.as_str(), row.theme.as_str()),
+            None => (format!("{OTHER}!{i:04}"), a.pane_id.as_str(), "", ""),
         })
         .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0));
-    for (key, pane, sub) in rows {
-        let tokens = vec![("hp_sub".to_string(), (!sub.is_empty()).then(|| sub.to_string())), ("hp_group".to_string(), Some(key))];
+    // A head opens each run of one project's rows under one theme.
+    let mut last: Option<(String, &str)> = None;
+    for (key, pane, sub, theme) in rows {
+        let group = (key.split('!').next().unwrap_or_default().to_string(), theme);
+        let head = (!theme.is_empty() && last.as_ref() != Some(&group)).then(|| theme.to_string());
+        last = Some(group);
+        let tokens = vec![
+            ("hp_sub".to_string(), (!sub.is_empty()).then(|| sub.to_string())),
+            ("hp_group".to_string(), Some(key)),
+            ("hp_head".to_string(), head),
+        ];
         out.agents.push((pane.to_string(), tokens));
+    }
+    // A Space two projects list (a shared repository) takes the first's head.
+    // Only projects with heads write Space tokens; a head left behind when a
+    // project drops its themes expires with its TTL.
+    let mut seen: HashSet<&str> = HashSet::new();
+    for part in parts.values().filter(|p| !p.heads.is_empty()) {
+        for id in part.spaces.iter().filter(|id| seen.insert(id.as_str())) {
+            let head = part.heads.iter().find(|(space, _)| space == id).map(|(_, theme)| theme.clone());
+            out.spaces.push((id.clone(), vec![("hp_head".to_string(), head)]));
+        }
     }
 
     // Spaces: a stable sort into blocks.
@@ -238,6 +295,11 @@ pub fn apply(herdr: &Herdr, socket: &str, parts: &Parts, agents: &[Agent], sent:
             report(herdr, "pane", pane, tokens);
         }
     }
+    for (space, tokens) in &layout.spaces {
+        if sent.due((format!("{socket} workspace"), space.clone()), tokens) {
+            report(herdr, "workspace", space, tokens);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -255,12 +317,12 @@ mod tests {
     }
 
     fn row(pane: &str, key: String, sub: &str) -> PaneRow {
-        PaneRow { pane: pane.into(), key, sub: sub.into() }
+        PaneRow { pane: pane.into(), key, sub: sub.into(), theme: String::new() }
     }
 
     fn parts() -> Parts {
         let mut parts = Parts::new();
-        parts.insert("beta".into(), ProjectPart { panes: vec![row("b1", coordinator_key("beta", "b1"), "")], home: "wb".into(), spaces: vec!["wb".into()] });
+        parts.insert("beta".into(), ProjectPart { panes: vec![row("b1", coordinator_key("beta", "b1"), "")], home: "wb".into(), spaces: vec!["wb".into()], heads: vec![] });
         parts.insert(
             "alpha".into(),
             ProjectPart {
@@ -271,6 +333,7 @@ mod tests {
                 ],
                 home: "wa".into(),
                 spaces: vec!["wa".into(), "repo".into(), "wt2".into(), "wt3".into()],
+                heads: vec![],
             },
         );
         parts
@@ -291,7 +354,8 @@ mod tests {
         assert_eq!(get(t["a1"], "hp_sub"), None, "an empty sub-line is cleared, so no row is drawn");
         assert!(t["a1"].iter().any(|(n, v)| n == "hp_sub" && v.is_none()));
         // No card carries a row of ours besides its own sub-line.
-        assert!(layout.agents.iter().all(|(_, t)| t.iter().all(|(n, _)| n == "hp_sub" || n == "hp_group")));
+        assert!(layout.agents.iter().all(|(_, t)| t.iter().all(|(n, _)| n == "hp_sub" || n == "hp_group" || n == "hp_head")));
+        assert!(layout.agents.iter().all(|(_, t)| get(t, "hp_head").is_none()), "no theme, no head");
         // The sort key the agent view uses reproduces this order.
         let keys: Vec<&str> = layout.agents.iter().map(|(_, t)| get(t, "hp_group").unwrap()).collect();
         let mut sorted = keys.clone();
@@ -355,5 +419,76 @@ mod tests {
     #[test]
     fn no_project_means_no_layout() {
         assert_eq!(plan(&Parts::new(), &[agent("x")], &[space("w", "", false)]), Plan::default());
+    }
+
+    fn themed(pane: &str, slug: &str, listed: &[String], theme: &str, id: &str, head: &str) -> PaneRow {
+        let slot = theme_slot(listed, theme);
+        let key = if id.starts_with("t-") { themed_key(slug, &slot, id) } else { agent_key(slug, Some(&slot), id) };
+        PaneRow { pane: pane.into(), key, sub: String::new(), theme: head.into() }
+    }
+
+    #[test]
+    fn themes_sort_listed_then_unlisted_then_none_with_one_head_each() {
+        let listed: Vec<String> = ["EHS", "Runs"].map(String::from).to_vec();
+        let mut parts = Parts::new();
+        parts.insert(
+            "glyd".into(),
+            ProjectPart {
+                panes: vec![
+                    row("c", coordinator_key("glyd", "c"), ""),
+                    themed("p68", "glyd", &listed, "", "t-0068", NO_THEME),
+                    themed("p60", "glyd", &listed, "Runs", "t-0060", "Runs"),
+                    themed("rec", "glyd", &listed, "EHS", "ehs-reconcile", "EHS"),
+                    themed("p56", "glyd", &listed, "EHS", "t-0056", "EHS"),
+                    themed("p41", "glyd", &listed, "VSM", "t-0041", "VSM"),
+                    themed("p44", "glyd", &listed, "EHS", "t-0044", "EHS"),
+                ],
+                home: "w2".into(),
+                spaces: vec!["w2".into()],
+                heads: vec![],
+            },
+        );
+        let agents: Vec<Agent> = ["p41", "rec", "p68", "c", "p44", "p60", "p56", "x"].into_iter().map(agent).collect();
+        let layout = plan(&parts, &agents, &[]);
+        let order: Vec<&str> = layout.agents.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(order, ["c", "p44", "p56", "rec", "p60", "p41", "p68", "x"], "listed themes in order, hand-made agents after their threads, unlisted, then none");
+        let heads: Vec<(&str, &str)> = layout.agents.iter().filter_map(|(p, t)| get(t, "hp_head").map(|h| (p.as_str(), h))).collect();
+        assert_eq!(heads, [("p44", "EHS"), ("p60", "Runs"), ("p41", "VSM"), ("p68", NO_THEME)]);
+        // The agent view sorts by key alone and gets the same order.
+        let keys: Vec<&str> = layout.agents.iter().map(|(_, t)| get(t, "hp_group").unwrap()).collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted);
+    }
+
+    #[test]
+    fn a_themed_row_keeps_its_place_whatever_its_state() {
+        let listed: Vec<String> = vec!["EHS".into()];
+        let slot = theme_slot(&listed, "EHS");
+        // The key has no state in it, so a state change cannot move the row.
+        assert_eq!(themed_key("glyd", &slot, "t-0044"), "glyd!1!000!EHS!t-0044");
+        assert!(themed_key("glyd", &slot, "t-0044") < themed_key("glyd", &slot, "t-0056"));
+        assert!(themed_key("glyd", &slot, "t-0056") < agent_key("glyd", Some(&slot), "ehs-reconcile"));
+        assert!(coordinator_key("glyd", "w2:p1") < themed_key("glyd", &slot, "t-0001"));
+        // Sorted by need, a hand-made agent follows every thread.
+        assert!(thread_key("glyd", 6, "t-9999") < agent_key("glyd", None, "ehs-reconcile"));
+        assert!(agent_key("glyd", None, "ehs-reconcile") < coordinator_key("glydx", "p"));
+    }
+
+    #[test]
+    fn spaces_carry_their_themes_head_and_others_clear_it() {
+        let mut parts = parts();
+        parts.get_mut("alpha").unwrap().heads = vec![("wt2".into(), "EHS".into())];
+        // `repo` is listed by beta too, with a head there: alpha, first by
+        // slug, decides.
+        parts.get_mut("beta").unwrap().spaces.push("repo".into());
+        parts.get_mut("beta").unwrap().heads = vec![("repo".into(), "Runs".into())];
+        let layout = plan(&parts, &[], &[]);
+        let heads: Vec<(&str, Option<&str>)> = layout.spaces.iter().map(|(s, t)| (s.as_str(), get(t, "hp_head"))).collect();
+        assert_eq!(heads, [("wa", None), ("repo", None), ("wt2", Some("EHS")), ("wt3", None), ("wb", None)]);
+        // A project without heads writes no Space tokens at all.
+        parts.get_mut("beta").unwrap().heads.clear();
+        let layout = plan(&parts, &[], &[]);
+        assert!(layout.spaces.iter().all(|(s, _)| s != "wb"));
     }
 }
