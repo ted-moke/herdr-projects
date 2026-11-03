@@ -49,7 +49,7 @@ name = "EHS faults & reconciler"
 agents = ["ehs-reconcile"]
 ```
 
-A thread gets its theme from `thread start --theme <name>` or `thread theme <project> <id> <name>` (`--clear` removes it). By theme, the project's agents sort by theme and then id, so a row stays put when its state changes, and the first row of each theme has a bold head with its name; unlisted themes follow the listed ones, and threads without one come last under `Other`. The Spaces list follows the same order. The head is the `$hp_head` row `configure` adds at the top of each card.
+A thread gets its theme from `thread start --theme <name>` or `thread theme <project> <id> <name>` (`--clear` removes it). By theme, the project's agents sort by theme and then id, so a row stays put when its state changes. Each theme opens after a blank line with its name in bold; unlisted themes follow the listed ones, and threads without one come last under `Other`. The Spaces list follows the same order, with the name above each theme's first Space. These are the `$hp_break` and `$hp_head` rows `configure` adds to the cards.
 
 ## Commands
 

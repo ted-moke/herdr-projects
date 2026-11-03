@@ -13,9 +13,11 @@
 //! block per project with `workspace.move`. Anything in no project comes last.
 //!
 //! Inside a project, threads either sort by need or by theme (PROJECT.md's
-//! `[[themes]]`). By theme, the first row of each theme carries `$hp_head`, a
-//! bold row of the theme's name drawn above it, in both lists; the theme's other agents
-//! carry a blank one so all its rows line up.
+//! `[[themes]]`). By theme, the agent rows close each theme with a blank line
+//! (`$hp_break`) and the next theme's bold name (`$hp_head`), both drawn
+//! under the row before it: Herdr indents a card's later lines, so a head on
+//! a theme's own first row would push only that row in. In the Spaces list
+//! the head sits on the theme's first Space.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -32,14 +34,12 @@ pub const HEAD_MARK: char = '\u{200B}';
 const OTHER: &str = "~";
 /// The head of a project's threads without a theme, once others have one.
 pub const NO_THEME: &str = "Other";
-/// `$hp_head` on every other row of a theme: a blank first line. Herdr indents
-/// a card's later lines, so with it each row under a head lines up with the
-/// first one, which the head itself pushes in.
-pub const SPACER: &str = "\u{2800}";
+/// `$hp_break`'s value: a blank line (a custom token draws only when set).
+pub const BLANK: &str = "\u{2800}";
 
 /// Every token this module writes.
 pub fn tokens() -> Vec<String> {
-    ["hp_sub", "hp_group", "hp_head"].map(String::from).to_vec()
+    ["hp_sub", "hp_group", "hp_head", "hp_break"].map(String::from).to_vec()
 }
 
 /// Tokens of earlier layouts: the 0.2.17/0.2.18 headings and the 0.2.19
@@ -153,20 +153,21 @@ pub fn plan(parts: &Parts, agents: &[Agent], workspaces: &[Workspace]) -> Plan {
         })
         .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0));
-    // A head opens each run of one project's rows under one theme.
-    let mut last: Option<(String, &str)> = None;
-    for (key, pane, sub, theme) in rows {
-        let group = (key.split('!').next().unwrap_or_default().to_string(), theme);
-        let head = match (theme.is_empty(), last.as_ref() == Some(&group)) {
-            (true, _) => None,
-            (false, false) => Some(theme.to_string()),
-            (false, true) => Some(SPACER.to_string()),
-        };
-        last = Some(group);
+    // A row whose next row opens a theme draws the break and that theme's
+    // head; the last row of a theme draws the break alone.
+    let group = |row: &(String, &str, &str, &str)| (row.0.split('!').next().unwrap_or_default().to_string(), row.3.to_string());
+    for (i, row) in rows.iter().enumerate() {
+        let next = rows.get(i + 1);
+        let opens = next.filter(|n| !n.3.is_empty() && group(n) != group(row));
+        let closes = !row.3.is_empty() && next.is_none_or(|n| group(n) != group(row));
+        let head = opens.map(|n| n.3.to_string());
+        let gap = (opens.is_some() || closes).then(|| BLANK.to_string());
+        let (key, pane, sub, _) = row;
         let tokens = vec![
             ("hp_sub".to_string(), (!sub.is_empty()).then(|| sub.to_string())),
-            ("hp_group".to_string(), Some(key)),
+            ("hp_group".to_string(), Some(key.clone())),
             ("hp_head".to_string(), head),
+            ("hp_break".to_string(), gap),
         ];
         out.agents.push((pane.to_string(), tokens));
     }
@@ -363,8 +364,8 @@ mod tests {
         assert_eq!(get(t["a1"], "hp_sub"), None, "an empty sub-line is cleared, so no row is drawn");
         assert!(t["a1"].iter().any(|(n, v)| n == "hp_sub" && v.is_none()));
         // No card carries a row of ours besides its own sub-line.
-        assert!(layout.agents.iter().all(|(_, t)| t.iter().all(|(n, _)| n == "hp_sub" || n == "hp_group" || n == "hp_head")));
-        assert!(layout.agents.iter().all(|(_, t)| get(t, "hp_head").is_none()), "no theme, no head");
+        assert!(layout.agents.iter().all(|(_, t)| t.iter().all(|(n, _)| tokens().contains(n))));
+        assert!(layout.agents.iter().all(|(_, t)| get(t, "hp_head").is_none() && get(t, "hp_break").is_none()), "no theme, no head");
         // The sort key the agent view uses reproduces this order.
         let keys: Vec<&str> = layout.agents.iter().map(|(_, t)| get(t, "hp_group").unwrap()).collect();
         let mut sorted = keys.clone();
@@ -461,14 +462,15 @@ mod tests {
         let layout = plan(&parts, &agents, &[]);
         let order: Vec<&str> = layout.agents.iter().map(|(p, _)| p.as_str()).collect();
         assert_eq!(order, ["c", "p44", "p56", "rec", "p60", "p41", "p68", "x"], "listed themes in order, hand-made agents after their threads, unlisted, then none");
-        let heads: Vec<(&str, &str)> = layout.agents.iter().filter_map(|(p, t)| get(t, "hp_head").filter(|h| *h != SPACER).map(|h| (p.as_str(), h))).collect();
-        assert_eq!(heads, [("p44", "EHS"), ("p60", "Runs"), ("p41", "VSM"), ("p68", NO_THEME)]);
-        // The other rows of a theme get a blank first line so all line up;
-        // rows in no theme (the coordinator, another project's) get none.
-        let spacers: Vec<&str> = layout.agents.iter().filter(|(_, t)| get(t, "hp_head") == Some(SPACER)).map(|(p, _)| p.as_str()).collect();
-        assert_eq!(spacers, ["p56", "rec"]);
+        // Each head hangs under the row before its theme, after a break; the
+        // last row of the last theme closes it with a break alone.
+        let heads: Vec<(&str, &str)> = layout.agents.iter().filter_map(|(p, t)| get(t, "hp_head").map(|h| (p.as_str(), h))).collect();
+        assert_eq!(heads, [("c", "EHS"), ("rec", "Runs"), ("p60", "VSM"), ("p41", NO_THEME)]);
+        let breaks: Vec<&str> = layout.agents.iter().filter(|(_, t)| get(t, "hp_break") == Some(BLANK)).map(|(p, _)| p.as_str()).collect();
+        assert_eq!(breaks, ["c", "rec", "p60", "p41", "p68"]);
         let t: HashMap<&str, &Tokens> = layout.agents.iter().map(|(p, t)| (p.as_str(), t)).collect();
-        assert_eq!((get(t["c"], "hp_head"), get(t["x"], "hp_head")), (None, None));
+        assert_eq!((get(t["p44"], "hp_head"), get(t["p44"], "hp_break")), (None, None), "rows inside a theme stay one line");
+        assert_eq!((get(t["x"], "hp_head"), get(t["x"], "hp_break")), (None, None));
         // The agent view sorts by key alone and gets the same order.
         let keys: Vec<&str> = layout.agents.iter().map(|(_, t)| get(t, "hp_group").unwrap()).collect();
         let mut sorted = keys.clone();
